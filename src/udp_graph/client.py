@@ -57,7 +57,7 @@ class Client:
         else:
             connections = self.connections.values()
             for connection in connections:
-                self.raw_send_bytes(connection, RoutingPacket.pack(target_client_id, [], {con.client_id for con in connections}))
+                self.raw_send_bytes(connection, RoutingPacket.pack(target_client_id, [self.client_id], {con.client_id for con in connections}))
 
             backtraces:list[BacktracePacket] = []
             while backtrace := self.listen_for_backtrace(timeout=1):
@@ -67,12 +67,11 @@ class Client:
                 raise ConnectionError(f"Failed to get backtrace to client {target_client_id!r}")
             
             shortest_bt = min(backtraces, key=lambda bt: len(bt.forward_list))
-            self.raw_send_bytes(self.connections[target_client_id], MessagePacket.pack(target_client_id, message, shortest_bt.forward_list))
+            self.raw_send_bytes(self.connections[shortest_bt.forward_list[1]], MessagePacket.pack(target_client_id, message, shortest_bt.forward_list))
             
             
     def send_backtrace(self, forward_list:list[str]):
         i = forward_list.index(self.client_id)
-        print("BACKTRACING to", forward_list[i-1])
         self.raw_send_bytes(self.connections[forward_list[i-1]], BacktracePacket.pack(forward_list))
 
 
@@ -105,7 +104,6 @@ class Client:
         if packet.forward_list[0] == self.client_id:
             self.backtrace_packet_queue.put(packet)
             return
-        print("BACKTRACING FROM", self.client_id)
         self.send_backtrace(packet.forward_list)
 
     def handle_routing_packet(self, raw_address:tuple[str, int], packet:RoutingPacket):
@@ -113,10 +111,15 @@ class Client:
         if packet.client_id == self.client_id:
             self.send_backtrace(packet.forward_list)
             return
-        for client_id in self.connections:
+        
+        to_forwards:list[ClientConnection] = []
+        for client_id, con in self.connections.items():
             if client_id not in packet.visited_set:
                 packet.visited_set.add(client_id)
-                self.forward_packet(self.connections[client_id], packet)
+                to_forwards.append(con)
+        
+        for forward in to_forwards:
+            self.forward_packet(forward, packet)
 
     def handle_message_packet(self, raw_address:tuple[str, int], packet:MessagePacket):
         if packet.client_id == self.client_id:
@@ -146,7 +149,6 @@ class Client:
                     self.packet_handler(raw_sender_address, data)
                 else:
                     ip, port = raw_sender_address
-                    print(f"Unknown sender {ip}:{port}")
             except OSError:
                 break
         self.disconnect_all()
