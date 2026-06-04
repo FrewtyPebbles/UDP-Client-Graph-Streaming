@@ -39,10 +39,14 @@ class Client:
     def raw_send_bytes(self, client_connection:ClientConnection, packet:bytes):
         self.udp_socket.sendto(packet, client_connection.to_tuple())
 
-    def get_client_info(self, client_connection:ClientConnection | str, timeout:int|None = None) -> InfoPacketResponse:
+    def get_client_info(self, client_connection:ClientConnection | str, timeout:int|None = None) -> InfoPacketResponse|None:
         client_connection = self.connections[client_connection] if isinstance(client_connection, str) else client_connection
         self.raw_send_bytes(client_connection, InfoPacketRequest.pack())
-        return self.client_info_queue.get(timeout=timeout)
+        try:
+            return self.client_info_queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        
     
     def listen_for_backtrace(self, block:bool = True, timeout:int|None = None) -> BacktracePacket|None:
         try:
