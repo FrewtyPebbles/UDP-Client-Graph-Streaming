@@ -1,6 +1,6 @@
 # About
 
-This is a little project I made in a night to try to implement my own mesh based network over UDP.  It uses a binary protocol and BFS to find routes to clients in the network.
+This is a project I made to try to implement my own mesh based network over UDP.  It uses a binary protocol and BFS to multi-hop stream packets over the mesh.
 
 # Binary Protocol v0
 
