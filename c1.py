@@ -13,4 +13,4 @@ if __name__ == "__main__":
             info_cmd = user_input.split()
             print(c1.get_client_info(info_cmd[1]).connections["c1"].to_tuple())
         else:
-            c1.send_bytes("c2", user_input.encode())
+            c1.send_message("c3", user_input.encode())

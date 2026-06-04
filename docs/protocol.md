@@ -35,6 +35,6 @@ This packet requests and replies with connectivity info. So which clients a clie
 
 ||Version|Packet Type|Packet Size| len(client id) | client id | $\text{Message Length}$ | Message |
 |---|---|---|---|---|---|---|---|
-|Value|0|0|???|1-255| "client id" | 0-510 | "Message content" |
+|Value|0|0|???|1-255| "client id" | 0-65535 | "Message content" |
 |Size|16 bit / 2 bytes| 8 bit / 1 byte | 16 bit / 2 bytes | 8 bit / 1 byte | (8 bit or 1 byte) * len(client id) | 16 bit / 2 bytes | (8 bit or 1 byte) * len(Message) |
 |type|int|int|int|int|str|int|str|
