@@ -1,9 +1,40 @@
-import socket as soct
+import asyncio
 import threading
+from types import CoroutineType
+from typing import Any
 from udp_graph.client_connection import ClientConnection
 from udp_graph.protocol import InfoPacketRequest, Packet, PacketType, InfoPacketResponse, MessagePacket, RoutingPacket, BacktracePacket
-import queue
 # TODO Implement connection reset request for if the queue misses alot of packets
+
+class UnknownAddress(Exception):
+    def __init__(self, ip:str, port:int, *args):
+        super().__init__(*args)
+        self.ip = ip
+        self.port = port
+
+class AsyncUDPListener(asyncio.DatagramProtocol):
+    def __init__(self, client:"Client", on_connection_lost_future:asyncio.Future[bool]):
+        super().__init__()
+        self.client = client
+        self.on_connection_lost_future = on_connection_lost_future
+        self.transport:asyncio.DatagramTransport | None = None
+    
+    def connection_made(self, transport):
+        self.transport = transport
+
+    def connection_lost(self, exc):
+        derived_res = super().connection_lost(exc)
+        self.client.disconnect_all()
+        self.on_connection_lost_future.set_result(True)
+        return derived_res
+    
+    def datagram_received(self, data, raw_addr):
+        if raw_addr in self.client.raw_to_connections:
+            asyncio.create_task(self.client.packet_handler(raw_addr, data))
+        else:
+            ip, port = raw_addr
+            print(f"Ignoring unknown sender {ip}:{port}.")
+            
 
 class Client:
     def __init__(self, client_id:str, ip:str, port:int, queue_size:int = 10):
@@ -13,13 +44,16 @@ class Client:
         self.raw_to_id:dict[tuple[str, int], str] = {}
         self.is_listening = False
         self.buffer_size = 1024
-        self.udp_socket = soct.socket(soct.AF_INET, soct.SOCK_DGRAM)
         self.ip = ip
         self.port = port
-        self.listen_loop_thread = threading.Thread(target=self._listen_loop, daemon=True)
-        self.client_info_queue:queue.Queue[InfoPacketResponse] = queue.Queue(queue_size)
-        self.client_message_queue:queue.Queue[MessagePacket] = queue.Queue(queue_size)
-        self.backtrace_packet_queue:queue.Queue[BacktracePacket] = queue.Queue(queue_size)
+        self.client_info_queue:asyncio.Queue[InfoPacketResponse] = asyncio.Queue(queue_size)
+        self.client_message_queue:asyncio.Queue[MessagePacket] = asyncio.Queue(queue_size)
+        self.backtrace_packet_queue:asyncio.Queue[BacktracePacket] = asyncio.Queue(queue_size)
+
+        # Socket Stuff:
+        self.async_loop = None
+        self.udp_transport = None
+        self.udp_protocol = None
 
     def connect(self, connection:ClientConnection):
         self.connections[connection.client_id] = connection
@@ -37,24 +71,24 @@ class Client:
         self.raw_to_id = {}
     
     def raw_send_bytes(self, client_connection:ClientConnection, packet:bytes):
-        self.udp_socket.sendto(packet, client_connection.to_tuple())
+        self.udp_transport.sendto(packet, client_connection.to_tuple())
 
-    def get_client_info(self, client_connection:ClientConnection | str, timeout:int|None = None) -> InfoPacketResponse|None:
+    async def get_client_info(self, client_connection:ClientConnection | str, timeout:int|None = None) -> InfoPacketResponse|None:
         client_connection = self.connections[client_connection] if isinstance(client_connection, str) else client_connection
         self.raw_send_bytes(client_connection, InfoPacketRequest.pack())
         try:
-            return self.client_info_queue.get(timeout=timeout)
-        except queue.Empty:
+            return await asyncio.wait_for(self.client_info_queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
             return None
         
     
-    def listen_for_backtrace(self, block:bool = True, timeout:int|None = None) -> BacktracePacket|None:
+    async def listen_for_backtrace(self, timeout:int|None = None) -> BacktracePacket|None:
         try:
-            return self.backtrace_packet_queue.get(block, timeout)
-        except queue.Empty:
+            return await asyncio.wait_for(self.backtrace_packet_queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
             return None
     
-    def send_message(self, target_client_id:str, message:bytes, timeout:int = 1):
+    async def send_message(self, target_client_id:str, message:bytes, timeout:int = 1):
         """Sends a message to the supplied client_id by using a breadth first search"""
         if target_client_id in self.connections:
             self.raw_send_bytes(self.connections[target_client_id], MessagePacket.pack(target_client_id, message, [self.client_id]))
@@ -64,7 +98,7 @@ class Client:
                 self.raw_send_bytes(connection, RoutingPacket.pack(target_client_id, [self.client_id], {con.client_id for con in connections}))
 
             backtraces:list[BacktracePacket] = []
-            while backtrace := self.listen_for_backtrace(timeout=1):
+            while backtrace := await self.listen_for_backtrace(timeout=1):
                 backtraces.append(backtrace)
             
             if not backtraces:
@@ -79,20 +113,20 @@ class Client:
         self.raw_send_bytes(self.connections[forward_list[i-1]], BacktracePacket.pack(forward_list))
 
 
-    def listen_for_message(self, block:bool = True, timeout:int|None = None) -> MessagePacket | None:
+    async def listen_for_message(self, timeout:int|None = None) -> MessagePacket | None:
         try:
-            return self.client_message_queue.get(block, timeout)
-        except queue.Empty:
+            return await asyncio.wait_for(self.client_message_queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
             return None
     
-    def packet_handler(self, raw_address:tuple[str, int], data:bytes):
+    async def packet_handler(self, raw_address:tuple[str, int], data:bytes):
         packet = Packet.unpack(data)
 
         match packet.packet_type:
             case PacketType.INFO_REQUEST:
                 self.send_client_info(raw_address, packet)
             case PacketType.INFO_RESPONSE:
-                self.client_info_queue.put(packet)
+                self.client_info_queue.put_nowait(packet)
             case PacketType.MESSAGE:
                 self.handle_message_packet(raw_address, packet)
             case PacketType.ROUTING:
@@ -106,7 +140,7 @@ class Client:
 
     def handle_backtrace_packet(self, raw_address:tuple[str, int], packet:BacktracePacket):
         if packet.forward_list[0] == self.client_id:
-            self.backtrace_packet_queue.put(packet)
+            self.backtrace_packet_queue.put_nowait(packet)
             return
         self.send_backtrace(packet.forward_list)
 
@@ -127,7 +161,7 @@ class Client:
 
     def handle_message_packet(self, raw_address:tuple[str, int], packet:MessagePacket):
         if packet.client_id == self.client_id:
-            self.client_message_queue.put(packet)
+            self.client_message_queue.put_nowait(packet)
             return
         # Figure out where the client is in the forward list and go to the next one.
         i = packet.forward_list.index(self.client_id)
@@ -136,25 +170,19 @@ class Client:
     def forward_packet(self, connection:ClientConnection, packet:MessagePacket|RoutingPacket|BacktracePacket):
         self.raw_send_bytes(connection, packet.repack())
 
-    def start_listening(self):
+    async def start_listening(self):
         """Starts the background listening loop."""
         self.is_listening = True
-        self.listen_loop_thread.start()
+        self.async_loop = asyncio.get_running_loop()
+        self.on_connection_lost_future:asyncio.Future[bool] = self.async_loop.create_future()
+        self.udp_transport, self.udp_protocol = await self.async_loop.create_datagram_endpoint(
+            lambda: AsyncUDPListener(self, self.on_connection_lost_future),
+            local_addr=(self.ip, self.port)
+        )
 
-    def stop_listening(self):
+    async def stop_listening(self):
+        if self.udp_transport:
+            self.udp_transport.close()
+            await self.on_connection_lost_future
+
         self.is_listening = False
-    
-    def _listen_loop(self):
-        self.udp_socket.bind((self.ip, self.port))
-        while self.is_listening:
-            try:
-                data, raw_sender_address = self.udp_socket.recvfrom(self.buffer_size)
-                if raw_sender_address in self.raw_to_connections:
-                    self.packet_handler(raw_sender_address, data)
-                else:
-                    ip, port = raw_sender_address
-            except OSError:
-                break
-        self.disconnect_all()
-        self.udp_socket.close()
-        

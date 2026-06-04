@@ -2,6 +2,7 @@ import re
 
 from udp_graph.client import Client, ClientConnection
 import argparse
+import asyncio
 
 def validate_ip(ip_address: str) -> bool:
     ip_pattern = re.compile(
@@ -10,7 +11,7 @@ def validate_ip(ip_address: str) -> bool:
     )
     return bool(ip_pattern.match(ip_address))
 
-if __name__ == "__main__":
+async def main():
     parser = argparse.ArgumentParser(description="A demo client that can send messages to other clients using a BFS.")
     parser.add_argument("client_name", type=str, help="The name of the client on the mesh network.")
     parser.add_argument("-a","--address", type=str, help="The address of the client.", default="0.0.0.0")
@@ -20,7 +21,7 @@ if __name__ == "__main__":
 
     
 
-    client.start_listening()
+    await client.start_listening()
 
     recipient = None
 
@@ -29,7 +30,7 @@ if __name__ == "__main__":
         if user_input.startswith("/info"):
             info_cmd = user_input.split()
             if len(info_cmd) == 2:
-                client_info = client.get_client_info(info_cmd[1])
+                client_info = await client.get_client_info(info_cmd[1])
                 if client_info:
                     print(f"{info_cmd[1]!r}'s connections:")
                     for connection in client_info.connections.values():
@@ -56,10 +57,13 @@ if __name__ == "__main__":
                 print("usage: /recipient <client_id>\n - Sets the recipient for messages.")
         else:
             if recipient:
-                client.send_message(recipient, user_input.encode())
+                await client.send_message(recipient, user_input.encode())
             else:
                 print("No recipient selected. Select the recipient of your messages with \"/recipient\".")
         
-        msg = client.listen_for_message(timeout=1)
+        msg = await client.listen_for_message(timeout=1)
         if msg:
             print(msg.message)
+
+if __name__ == "__main__":
+    asyncio.run(main())
