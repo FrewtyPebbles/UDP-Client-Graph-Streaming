@@ -134,7 +134,12 @@ class MessagePacket:
             
         packet_size += struct.calcsize(visited_structure)
 
-        return struct.pack(f"{HEADER_STRUCTURE}B{target_id_size}s" + visited_structure + f"B{message_size}s", PROTOCOL_VERSION, PacketType.MESSAGE.value, packet_size, target_id_size, target_client_id, *visited_set, message_size, message)
+        return struct.pack(f"{HEADER_STRUCTURE}B{target_id_size}s" + visited_structure + f"B{message_size}s", PROTOCOL_VERSION,
+            PacketType.MESSAGE.value,
+            packet_size, target_id_size,
+            target_client_id, *visited_set,
+            message_size, message
+        )
     
 class Packet:
     @classmethod
