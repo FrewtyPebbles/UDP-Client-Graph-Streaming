@@ -1,6 +1,6 @@
 # About
 
-This is a UDP mesh network client and protocol which can multi-hop stream packets over UDP.  It uses a binary protocol and BFS to multi-hop stream packets over the mesh.
+This is a UDP mesh network asynchronous client and protocol which can multi-hop stream packets over UDP.  It uses a binary protocol and BFS to multi-hop stream packets over the mesh.
 
 # Binary Protocol v0
 
