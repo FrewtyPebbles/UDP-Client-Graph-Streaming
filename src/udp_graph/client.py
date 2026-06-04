@@ -1,10 +1,6 @@
 import asyncio
-import threading
-from types import CoroutineType
-from typing import Any
 from udp_graph.client_connection import ClientConnection
-from udp_graph.protocol import InfoPacketRequest, Packet, PacketType, InfoPacketResponse, MessagePacket, RoutingPacket, BacktracePacket
-# TODO Implement connection reset request for if the queue misses alot of packets
+from udp_graph.protocol import Packet, PacketType, InfoPacket, MessagePacket, RoutingPacket, BacktracePacket
 
 class UnknownAddress(Exception):
     def __init__(self, ip:str, port:int, *args):
@@ -30,10 +26,9 @@ class AsyncUDPListener(asyncio.DatagramProtocol):
     
     def datagram_received(self, data, raw_addr):
         if raw_addr in self.client.raw_to_connections:
-            asyncio.create_task(self.client.packet_handler(raw_addr, data))
+            self.client.packet_handler(raw_addr, data)
         else:
             ip, port = raw_addr
-            print(f"Ignoring unknown sender {ip}:{port}.")
             
 
 class Client:
@@ -46,7 +41,7 @@ class Client:
         self.buffer_size = 1024
         self.ip = ip
         self.port = port
-        self.client_info_queue:asyncio.Queue[InfoPacketResponse] = asyncio.Queue(queue_size)
+        self.client_info_queue:asyncio.Queue[InfoPacket] = asyncio.Queue(queue_size)
         self.client_message_queue:asyncio.Queue[MessagePacket] = asyncio.Queue(queue_size)
         self.backtrace_packet_queue:asyncio.Queue[BacktracePacket] = asyncio.Queue(queue_size)
 
@@ -54,6 +49,8 @@ class Client:
         self.async_loop = None
         self.udp_transport = None
         self.udp_protocol = None
+
+        self.shortest_path_cache:dict[str, list[str]] = {}
 
     def connect(self, connection:ClientConnection):
         self.connections[connection.client_id] = connection
@@ -73,9 +70,9 @@ class Client:
     def raw_send_bytes(self, client_connection:ClientConnection, packet:bytes):
         self.udp_transport.sendto(packet, client_connection.to_tuple())
 
-    async def get_client_info(self, client_connection:ClientConnection | str, timeout:int|None = None) -> InfoPacketResponse|None:
+    async def get_client_info(self, client_connection:ClientConnection | str, timeout:int|None = None) -> InfoPacket|None:
         client_connection = self.connections[client_connection] if isinstance(client_connection, str) else client_connection
-        self.raw_send_bytes(client_connection, InfoPacketRequest.pack())
+        self.send_routing_packets(client_connection.client_id, PacketType.INFO)
         try:
             return await asyncio.wait_for(self.client_info_queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -87,30 +84,40 @@ class Client:
             return await asyncio.wait_for(self.backtrace_packet_queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
+        
+    def send_routing_packets(self, target_client_id:str, request_type:PacketType):
+        connections = self.connections.values()
+        for connection in connections:
+            self.raw_send_bytes(connection, RoutingPacket.pack(target_client_id, [self.client_id], {con.client_id for con in connections}, request_type))
+
+    async def get_backtrace(self, target_client_id:str, timeout:int = 1) -> BacktracePacket:
+        self.send_routing_packets(target_client_id, PacketType.BACKTRACE)
+
+        backtraces:list[BacktracePacket] = []
+        while backtrace := await self.listen_for_backtrace(timeout=timeout):
+            backtraces.append(backtrace)
+        
+        if not backtraces:
+            raise ConnectionError(f"Failed to get backtrace to client {target_client_id!r}")
+        
+        return min(backtraces, key=lambda bt: len(bt.forward_list))
     
     async def send_message(self, target_client_id:str, message:bytes, timeout:int = 1):
         """Sends a message to the supplied client_id by using a breadth first search"""
         if target_client_id in self.connections:
             self.raw_send_bytes(self.connections[target_client_id], MessagePacket.pack(target_client_id, message, [self.client_id]))
         else:
-            connections = self.connections.values()
-            for connection in connections:
-                self.raw_send_bytes(connection, RoutingPacket.pack(target_client_id, [self.client_id], {con.client_id for con in connections}))
-
-            backtraces:list[BacktracePacket] = []
-            while backtrace := await self.listen_for_backtrace(timeout=1):
-                backtraces.append(backtrace)
-            
-            if not backtraces:
-                raise ConnectionError(f"Failed to get backtrace to client {target_client_id!r}")
-            
-            shortest_bt = min(backtraces, key=lambda bt: len(bt.forward_list))
-            self.raw_send_bytes(self.connections[shortest_bt.forward_list[1]], MessagePacket.pack(target_client_id, message, shortest_bt.forward_list))
+            backtrace = await self.get_backtrace(target_client_id, timeout)
+            self.raw_send_bytes(self.connections[backtrace.forward_list[1]], MessagePacket.pack(target_client_id, message, backtrace.forward_list))
             
             
     def send_backtrace(self, forward_list:list[str]):
         i = forward_list.index(self.client_id)
         self.raw_send_bytes(self.connections[forward_list[i-1]], BacktracePacket.pack(forward_list))
+
+    def send_info(self, forward_list:list[str]):
+        i = forward_list.index(self.client_id)
+        self.raw_send_bytes(self.connections[forward_list[i-1]], InfoPacket.pack(list(self.connections.values()), forward_list))
 
 
     async def listen_for_message(self, timeout:int|None = None) -> MessagePacket | None:
@@ -119,35 +126,44 @@ class Client:
         except asyncio.TimeoutError:
             return None
     
-    async def packet_handler(self, raw_address:tuple[str, int], data:bytes):
+    def packet_handler(self, raw_address:tuple[str, int], data:bytes):
         packet = Packet.unpack(data)
 
         match packet.packet_type:
-            case PacketType.INFO_REQUEST:
-                self.send_client_info(raw_address, packet)
-            case PacketType.INFO_RESPONSE:
-                self.client_info_queue.put_nowait(packet)
+            case PacketType.INFO:
+                self.handle_info_packet(packet)
             case PacketType.MESSAGE:
-                self.handle_message_packet(raw_address, packet)
+                self.handle_message_packet(packet)
             case PacketType.ROUTING:
-                self.handle_routing_packet(raw_address, packet)
+                self.handle_routing_packet(packet)
             case PacketType.BACKTRACE:
-                self.handle_backtrace_packet(raw_address, packet)
+                self.handle_backtrace_packet(packet)
 
+    def handle_info_packet(self, packet:InfoPacket):
+        if packet.forward_list[0] == self.client_id:
+            self.client_info_queue.put_nowait(packet)
+            return
+        # Figure out where the client is in the forward list and go to the next one.
+        i = packet.forward_list.index(self.client_id)
+        self.forward_packet(self.connections[packet.forward_list[i+1]], packet)
 
-    def send_client_info(self, raw_address:tuple[str, int], packet:MessagePacket):
-        self.raw_send_bytes(self.raw_to_connections[raw_address], InfoPacketResponse.pack(list(self.connections.values())))
-
-    def handle_backtrace_packet(self, raw_address:tuple[str, int], packet:BacktracePacket):
+    def handle_backtrace_packet(self, packet:BacktracePacket):
         if packet.forward_list[0] == self.client_id:
             self.backtrace_packet_queue.put_nowait(packet)
             return
         self.send_backtrace(packet.forward_list)
 
-    def handle_routing_packet(self, raw_address:tuple[str, int], packet:RoutingPacket):
+    def handle_routing_packet_request_type(self, packet:RoutingPacket):
+        match packet.request_type:
+            case PacketType.BACKTRACE:
+                self.send_backtrace(packet.forward_list)
+            case PacketType.INFO:
+                self.send_info(packet.forward_list)
+
+    def handle_routing_packet(self, packet:RoutingPacket):
         packet.forward_list.append(self.client_id)
         if packet.client_id == self.client_id:
-            self.send_backtrace(packet.forward_list)
+            self.handle_routing_packet_request_type(packet)
             return
         
         to_forwards:list[ClientConnection] = []
@@ -159,7 +175,7 @@ class Client:
         for forward in to_forwards:
             self.forward_packet(forward, packet)
 
-    def handle_message_packet(self, raw_address:tuple[str, int], packet:MessagePacket):
+    def handle_message_packet(self, packet:MessagePacket):
         if packet.client_id == self.client_id:
             self.client_message_queue.put_nowait(packet)
             return
