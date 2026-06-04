@@ -56,7 +56,7 @@ Next, we backtrace through the network using just the forward part of the routin
 ||Version|Packet Type|Packet Size| Forward Count | len(forward client id) | forward client id | ...repeat |
 |---|---|---|---|---|---|---|---|
 |Value|0|0|???| 1-255 | 1-255| "forward client id" | repeat schema from and including **len(forward client id)** for all of the forwarding clients |0-255|0-255|"visited client id"| repeat schema from and including **len(visited client id)** for all of the visited clients |
-|Size (bytes)|2|1|2|1|len(client id)|1|1|len(forward client id)||1|1|len(visited client id)||
+|Size (bytes)|2|1|2|1|1|len(forward client id)||1|1|len(visited client id)||
 |type|int|int|int|int|int|str||int|int|str||
 
 ### Message Packet
@@ -66,5 +66,5 @@ Then the message is sent using the route our Routing and backtrace packets mappe
 ||Version|Packet Type|Packet Size| len(client id) | client id | Forward Count | len(forward client id) | forward client id | ...repeat | $\text{Message Length}$ | Message |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 |Value|0|0|???|1-255| "client id" | 1-255| 1-255| "client id" | repeat schema from and including **Forward Count** for all of the forwarding clients | 0-1024 | "Message content" |
-|Size (bytes)|2|1|2|1|len(client id)|1|1|len(forward client id)|| 16 bit / 2 bytes | (8 bit or 1 byte) * len(Message) |
+|Size (bytes)|2|1|2|1|len(client id)|1|1|len(forward client id)|| 2 | len(Message) |
 |type|int|int|int|int|str|int|int|str||int|str|
