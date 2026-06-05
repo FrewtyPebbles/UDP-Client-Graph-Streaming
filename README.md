@@ -44,11 +44,11 @@ Next, we backtrace through the network using just the forward part of the routin
 This packet contains the connectivity info for the target client along with the routing path it will be sent back on.
 
 
-||Version|Packet Type|Packet Size| Forward Count | len(forward client id) | forward client id | ...repeat | len(client id) | client id | ???.xxx.xxx.xxx | xxx.???.xxx.xxx | xxx.xxx.???.xxx | xxx.xxx.xxx.??? | port | ...repeat|
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-|Value|0|INFO|???|0-255|1-255|"forward client id"|Repeat schema from and including **len(forward client id)** for each connection|1-255|"client id"|0-255|0-255|0-255|0-255|0-65535| Repeat schema from and including **len(client id)** for each connection
-|Size (bytes)|2|1|2|1|1|len(forward client id)|| 8 bit / 1 byte | (8 bit or 1 byte) * len(client id) | 8 bit / 1 byte | 8 bit / 1 byte | 8 bit / 1 byte | 8 bit / 1 byte | 16 bit / 2 bytes ||
-|type|int|int|int|int|int|str||int|str|int|int|int|int|int||
+||Version|Packet Type|Packet Size| len(client id) | client id | Forward Count | len(forward client id) | forward client id | ...repeat | len(client id) | client id | ???.xxx.xxx.xxx | xxx.???.xxx.xxx | xxx.xxx.???.xxx | xxx.xxx.xxx.??? | port | ...repeat|
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+|Value|0|INFO|???|1-255| "client id" |0-255|1-255|"forward client id"|Repeat schema from and including **len(forward client id)** for each connection|1-255|"client id"|0-255|0-255|0-255|0-255|0-65535| Repeat schema from and including **len(client id)** for each connection
+|Size (bytes)|2|1|2|1|len(client id)|1|1|len(forward client id)|| 8 bit / 1 byte | (8 bit or 1 byte) * len(client id) | 8 bit / 1 byte | 8 bit / 1 byte | 8 bit / 1 byte | 8 bit / 1 byte | 16 bit / 2 bytes ||
+|type|int|int|int|int|str|int|int|str||int|str|int|int|int|int|int||
 
 ## Message Packet
 
