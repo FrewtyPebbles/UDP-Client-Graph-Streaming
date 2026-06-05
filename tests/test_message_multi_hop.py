@@ -27,14 +27,14 @@ def _template_test_mesh_network_message(mesh_network:GraphFixtureValue, aio_benc
     # not cached
     start = time.perf_counter()
     message_packet:MessagePacket = loop.run_until_complete(send_message(b"test"))
-    logger.info(f"Non cached message send benchmark(single test): {(time.perf_counter() - start) * 1000}ms")
+    logger.info(f"Non cached message send benchmark(single test): {(time.perf_counter() - start) * 1000:.4f} ms")
 
     assert message_packet is not None
 
     assert message_packet.message == b"test"
 
     # cached
-    message_packet:MessagePacket = aio_benchmark(send_message, message=b"test", rounds=1000, iterations=1)
+    message_packet:MessagePacket = aio_benchmark(send_message, message=b"test", rounds=1500, iterations=1)
 
     assert message_packet is not None
 
