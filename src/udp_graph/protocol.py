@@ -54,6 +54,13 @@ class InfoPacket(Packet):
         remaining_packet = packet[HEADER_SIZE:]
         if len(remaining_packet) != packet_size:
             raise ValueError("Invalid packet size")
+        
+        id_len, = struct.unpack("!B", remaining_packet[:1])
+        remaining_packet = remaining_packet[1:]
+        
+        raw_id, = struct.unpack(f"!{id_len}s", remaining_packet[:id_len])
+        self.client_id:str = raw_id.decode()
+        remaining_packet = remaining_packet[id_len:]
 
         # FORWARD LIST
         num_forwarded, = struct.unpack("!B", remaining_packet[:1])
@@ -68,7 +75,7 @@ class InfoPacket(Packet):
 
         # END FORWARD LIST
 
-        connections:list[ClientConnection] = []
+        self.connections:dict[str, ClientConnection] = {}
         while remaining_packet:
             
             id_len, = struct.unpack("!B", remaining_packet[:1])
@@ -78,22 +85,24 @@ class InfoPacket(Packet):
             client_id:str = raw_id.decode()
             remaining_packet = remaining_packet[id_len:]
             
-            print(remaining_packet[:IP_SIZE])
             ip1, ip2, ip3, ip4, port = struct.unpack(f"!{IP_STRUCTURE}", remaining_packet[:IP_SIZE])
             remaining_packet = remaining_packet[IP_SIZE:]
-            connections.append(ClientConnection(client_id, f"{ip1}.{ip2}.{ip3}.{ip4}", port))
+            self.connections[client_id] = ClientConnection(client_id, f"{ip1}.{ip2}.{ip3}.{ip4}", port)
         
-        self.connections = {con.client_id:con for con in connections}
 
     def repack(self) -> bytes:
-        return self.pack(self.connections, self.forward_list)
+        return self.pack(self.client_id, self.connections, self.forward_list)
 
     @classmethod
-    def pack(cls, connections:list[ClientConnection], forwarded_client_ids:list[str]) -> bytes:
+    def pack(cls, target_client_id:str, connections:dict[str, ClientConnection], forwarded_client_ids:list[str]) -> bytes:
         connection_schemas = []
         connection_values = []
 
         packet_size = 0
+
+        target_client_id = target_client_id.encode("utf-8")
+        target_id_size = len(target_client_id)
+        packet_size = 1 + target_id_size
 
         # BEGIN FORWARDED
         forwarded_structure = "B"
@@ -107,7 +116,7 @@ class InfoPacket(Packet):
         packet_size += struct.calcsize(forwarded_structure)
         # END FORWARDED
 
-        for connection in connections:
+        for connection in connections.values():
             c_id = connection.client_id.encode("utf-8")
             id_size = len(c_id)
             connection_schemas.append("B" + f"{id_size}s" + IP_STRUCTURE)
@@ -120,8 +129,10 @@ class InfoPacket(Packet):
             ])
 
 
-        return struct.pack(HEADER_STRUCTURE + forwarded_structure + "".join(connection_schemas),
-            PROTOCOL_VERSION, PacketType.INFO_RESPONSE.value, packet_size,
+        return struct.pack(f"{HEADER_STRUCTURE}B{target_id_size}s" + forwarded_structure + "".join(connection_schemas),
+            PROTOCOL_VERSION, PacketType.INFO.value, packet_size,
+            target_id_size,
+            target_client_id,
             *forwarded_list,
             *connection_values
         )
@@ -189,11 +200,13 @@ class MessagePacket(Packet):
         message_size = len(message)
         packet_size += 1 + message_size
 
-        return struct.pack(f"{HEADER_STRUCTURE}B{target_id_size}s" + forwarded_structure + f"B{message_size}s", PROTOCOL_VERSION,
-            PacketType.MESSAGE.value,
-            packet_size, target_id_size,
-            target_client_id, *forwarded_list,
-            message_size, message
+        return struct.pack(f"{HEADER_STRUCTURE}B{target_id_size}s" + forwarded_structure + f"B{message_size}s",
+            PROTOCOL_VERSION, PacketType.MESSAGE.value, packet_size,
+            target_id_size,
+            target_client_id,
+            *forwarded_list,
+            message_size,
+            message
         )
     
 class RoutingPacket(Packet):

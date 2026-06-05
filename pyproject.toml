@@ -14,9 +14,13 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
+    "pytest-benchmark>=5.2.3",
 ]
 
 [tool.pytest.ini_options]
+log_cli = true
+log_cli_level = "INFO"
+log_cli_format = "%(asctime)s [%(levelname)s] %(message)s"
 asyncio_mode = "auto"
 testpaths = [
     "tests",
