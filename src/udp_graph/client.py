@@ -34,6 +34,7 @@ class AsyncUDPListener(asyncio.DatagramProtocol):
 
 class Client:
     def __init__(self, client_id:str, ip:str, port:int, queue_size:int = 10):
+        self.client_connection:ClientConnection|None = None
         self.client_id = client_id
         self.connections:dict[str, ClientConnection] = {}
         self.raw_to_connections:dict[tuple[str, int], ClientConnection] = {}
